@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Gateway</title>
+    <style>
+        :root { --primary: #2563eb; --bg: #f8fafc; --text: #1e293b; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; }
+        .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+        
+        /* Auth Modal */
+        #auth-modal { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: white; padding: 2rem; border-radius: 8px; width: 300px; }
+        
+        /* Dashboard */
+        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .credits-box { font-weight: bold; font-size: 1.2rem; }
+        
+        /* Terminal */
+        .terminal { background: #1e1e1e; padding: 20px; border-radius: 8px; color: #00ff00; font-family: monospace; margin-bottom: 20px; }
+        .input-group { display: flex; gap: 10px; }
+        input[type="text"] { flex: 1; padding: 10px; border-radius: 4px; border: 1px solid #ccc; font-family: monospace; }
+        button { padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { opacity: 0.9; }
+        button.danger { background: var(--danger); }
+        
+        /* Tabs */
+        .tabs { margin-bottom: 10px; }
+        .tab-btn { background: #e2e8f0; color: #475569; margin-right: 5px; }
+        .tab-btn.active { background: var(--primary); color: white; }
+        
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f1f5f9; }
+        .status-executed, .status-approved { color: var(--success); font-weight: bold; }
+        .status-rejected { color: var(--danger); font-weight: bold; }
+        .status-pending { color: var(--warning); font-weight: bold; }
+        
+        .hidden { display: none; }
+        .alert { padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        .alert.success { background: #dcfce7; color: #166534; }
+    </style>
+</head>
+<body>
+
+<!-- Login Modal -->
+<div id="auth-modal">
+    <div class="modal-content">
+        <h2>Login</h2>
+        <p>Enter your API Key</p>
+        <input type="text" id="api-key-input" placeholder="e.g. admin-secret" style="width: 100%; box-sizing: border-box; margin-bottom: 10px;">
+        <button onclick="login()" style="width: 100%">Enter Gateway</button>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 10px;">Default Admin Key: <b>admin-secret</b></p>
+    </div>
+</div>
+
+<div class="container hidden" id="dashboard">
+    <!-- Header -->
+    <div class="header">
+        <div>
+            <h1 style="margin:0">Command Gateway</h1>
+            <span id="user-display"></span> <span id="role-badge" style="background:#ddd; padding:2px 6px; border-radius:4px; font-size:0.8rem;"></span>
+        </div>
+        <div>
+            Credits: <span class="credits-box" id="credits-display">0</span>
+            <button onclick="logout()" style="margin-left: 10px; background: #64748b;">Logout</button>
+        </div>
+    </div>
+
+    <!-- Command Execution -->
+    <div class="terminal">
+        <div id="cmd-output" style="min-height: 50px; margin-bottom: 10px; white-space: pre-wrap;">Welcome to the Gateway. Enter command...</div>
+        <div class="input-group">
+            <span style="align-self: center;">$</span>
+            <input type="text" id="cmd-input" placeholder="ls -la">
+            <button onclick="submitCommand()">Run</button>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('history')">Audit Log</button>
+        <button class="tab-btn" onclick="showTab('approvals')">Approvals</button> <!-- Unhidden for everyone -->
+        <button class="tab-btn admin-only hidden" onclick="showTab('rules')">Rules Config</button>
+        <button class="tab-btn admin-only hidden" onclick="showTab('users')">User Management</button>
+    </div>
+
+    <!-- History Tab -->
+    <div id="tab-history">
+        <table>
+            <thead><tr><th>Time</th><th class="admin-only hidden">User</th><th>Command</th><th>Status</th><th>Matched Rule</th></tr></thead>
+            <tbody id="history-table"></tbody>
+        </table>
+    </div>
+
+    <!-- Approvals Tab -->
+    <div id="tab-approvals" class="hidden">
+        <h3>Approval Requests</h3>
+        <table>
+            <thead><tr><th>User</th><th>Command</th><th>Time</th><th>Status / Action</th></tr></thead>
+            <tbody id="approvals-table"></tbody>
+        </table>
+    </div>
+
+    <!-- Rules Tab -->
+    <div id="tab-rules" class="hidden">
+        <div style="background: white; padding: 15px; margin-bottom: 15px; border-radius: 8px;">
+            <h3>Add New Rule</h3>
+            <div class="input-group" style="display:flex; flex-direction: column; gap: 10px;">
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="rule-pattern" placeholder="Regex Pattern (e.g. ^rm .*)" style="flex:2">
+                    <select id="rule-action" style="padding: 10px;">
+                        <option value="AUTO_REJECT">AUTO_REJECT</option>
+                        <option value="AUTO_ACCEPT">AUTO_ACCEPT</option>
+                        <option value="REQUIRE_APPROVAL">REQUIRE_APPROVAL</option>
+                    </select>
+                </div>
+                <div style="display:flex; gap:10px;">
+                    <input type="text" id="rule-message" placeholder="User Message" style="flex:1">
+                    <button onclick="addRule()">Add Rule</button>
+                </div>
+            </div>
+        </div>
+        <table>
+            <thead><tr><th>ID</th><th>Pattern</th><th>Action</th><th>Message</th><th>Control</th></tr></thead>
+            <tbody id="rules-table"></tbody>
+        </table>
+    </div>
+
+    <!-- Users Tab -->
+    <div id="tab-users" class="hidden">
+        <div style="background: white; padding: 15px; margin-bottom: 15px; border-radius: 8px;">
+            <h3>Create User</h3>
+            <div class="input-group">
+                <input type="text" id="new-username" placeholder="Username">
+                <select id="new-role" style="padding: 10px;">
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                </select>
+                <button onclick="createUser()">Create</button>
+            </div>
+            <div id="new-key-display" class="alert success hidden" style="margin-top:10px;"></div>
+        </div>
+        <table>
+            <thead><tr><th>ID</th><th>Username</th><th>Role</th><th>Credits</th></tr></thead>
+            <tbody id="users-table"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    let API_KEY = localStorage.getItem('gateway_key');
+    let USER_ROLE = '';
+
+    if (API_KEY) verifyKey();
+
+    async function apiCall(endpoint, method='GET', body=null) {
+        try {
+            const headers = { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' };
+            const options = { method, headers };
+            if (body) options.body = JSON.stringify(body);
+            
+            const res = await fetch(endpoint, options);
+            if (res.status === 401 || res.status === 403) {
+                logout();
+                throw new Error('Auth failed');
+            }
+            return await res.json();
+        } catch (e) {
+            console.error("API Error:", e);
+            return { error: 'Connection failed' };
+        }
+    }
+
+    async function verifyKey() {
+        const user = await apiCall('/api/me');
+        if (user.error) {
+            document.getElementById('auth-modal').style.display = 'flex';
+            return;
+        }
+        
+        document.getElementById('auth-modal').style.display = 'none';
+        document.getElementById('dashboard').classList.remove('hidden');
+        document.getElementById('user-display').textContent = user.username;
+        document.getElementById('role-badge').textContent = user.role.toUpperCase();
+        document.getElementById('credits-display').textContent = user.credits;
+        
+        USER_ROLE = user.role;
+        
+        // Show Admin Only tabs
+        if (USER_ROLE === 'admin') {
+            document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
+        }
+
+        refreshAll();
+    }
+
+    function login() {
+        const key = document.getElementById('api-key-input').value.trim();
+        if(!key) return;
+        API_KEY = key;
+        localStorage.setItem('gateway_key', key);
+        verifyKey();
+    }
+
+    function logout() {
+        localStorage.removeItem('gateway_key');
+        location.reload();
+    }
+
+    async function submitCommand() {
+        const input = document.getElementById('cmd-input');
+        const cmd = input.value;
+        const outputDiv = document.getElementById('cmd-output');
+        
+        if (!cmd) return;
+        outputDiv.innerHTML += `\n> ${cmd}`;
+        
+        const res = await apiCall('/api/commands', 'POST', { command_text: cmd });
+        
+        if (res.status === 'executed' || res.status === 'pending_approval') {
+            const color = res.status === 'executed' ? '#22c55e' : '#f59e0b';
+            const prefix = res.status === 'executed' ? 'SUCCESS' : 'PENDING';
+            outputDiv.innerHTML += `\n<span style="color:${color}">[${prefix}] ${res.message}</span>`;
+            if(res.new_balance !== undefined) document.getElementById('credits-display').textContent = res.new_balance;
+        } else {
+            outputDiv.innerHTML += `\n<span style="color:#ef4444">[BLOCKED] ${res.message || res.error}</span>`;
+        }
+        
+        outputDiv.scrollTop = outputDiv.scrollHeight;
+        input.value = '';
+        refreshAll(); // Refresh tables immediately
+    }
+
+    async function loadHistory() {
+        const data = await apiCall('/api/history');
+        const tbody = document.getElementById('history-table');
+        if (!Array.isArray(data)) { tbody.innerHTML = '<tr><td colspan="5">Error loading data</td></tr>'; return; }
+        
+        tbody.innerHTML = data.map(h => `
+            <tr>
+                <td>${new Date(h.timestamp).toLocaleTimeString()}</td>
+                ${USER_ROLE === 'admin' ? `<td>${h.username || 'me'}</td>` : ''}
+                <td><code>${h.command_text}</code></td>
+                <td class="status-${h.status ? h.status.toLowerCase().replace(' ', '-') : 'unknown'}">${h.status ? h.status.toUpperCase() : 'UNKNOWN'}</td>
+                <td>${h.rule_matched || '-'}</td>
+            </tr>
+        `).join('');
+    }
+
+    async function loadApprovals() {
+        const data = await apiCall('/api/approvals');
+        const tbody = document.getElementById('approvals-table');
+        
+        if (!Array.isArray(data)) { tbody.innerHTML = '<tr><td colspan="4">Error loading approvals</td></tr>'; return; }
+        if (data.length === 0) { tbody.innerHTML = '<tr><td colspan="4">No pending approvals</td></tr>'; return; }
+
+        tbody.innerHTML = data.map(r => {
+            // Logic to determine what to show in the Action column
+            let actionHtml = '';
+            
+            if (USER_ROLE === 'admin' && r.status === 'pending') {
+                // Admin gets buttons for pending items
+                actionHtml = `
+                    <button onclick="decideApproval(${r.id}, 'approved')" style="background:var(--success)">Approve</button>
+                    <button onclick="decideApproval(${r.id}, 'rejected')" class="danger">Reject</button>
+                `;
+            } else {
+                // Members (or admins viewing old history) get a badge
+                actionHtml = `<span class="status-${r.status}">${r.status.toUpperCase()}</span>`;
+            }
+
+            return `
+            <tr>
+                <td>${r.username}</td>
+                <td><code style="background:#eee; padding:2px;">${r.command_text}</code></td>
+                <td>${new Date(r.timestamp).toLocaleTimeString()}</td>
+                <td>${actionHtml}</td>
+            </tr>
+            `;
+        }).join('');
+    }
+
+    async function decideApproval(id, decision) {
+        await apiCall('/api/approvals', 'POST', { request_id: id, decision });
+        loadApprovals();
+    }
+
+    // Rules & Users Logic (Same as before)
+    async function loadRules() {
+        if (USER_ROLE !== 'admin') return;
+        const data = await apiCall('/api/rules');
+        const tbody = document.getElementById('rules-table');
+        if (!Array.isArray(data)) return;
+        tbody.innerHTML = data.map(r => `
+            <tr>
+                <td>${r.id}</td>
+                <td><code>${r.pattern}</code></td>
+                <td>${r.action}</td>
+                <td><small>${r.message || ''}</small></td>
+                <td><button class="danger" onclick="deleteRule(${r.id})">Delete</button></td>
+            </tr>
+        `).join('');
+    }
+
+    async function addRule() {
+        const pattern = document.getElementById('rule-pattern').value;
+        const action = document.getElementById('rule-action').value;
+        const message = document.getElementById('rule-message').value;
+        if (!pattern) return;
+        await apiCall('/api/rules', 'POST', { pattern, action, message });
+        document.getElementById('rule-pattern').value = '';
+        loadRules();
+    }
+
+    async function deleteRule(id) {
+        if(confirm('Delete rule?')) { await apiCall(`/api/rules?id=${id}`, 'DELETE'); loadRules(); }
+    }
+
+    async function loadUsers() {
+        if (USER_ROLE !== 'admin') return;
+        const data = await apiCall('/api/users');
+        const tbody = document.getElementById('users-table');
+        if (!Array.isArray(data)) return;
+        tbody.innerHTML = data.map(u => `
+            <tr><td>${u.id}</td><td>${u.username}</td><td>${u.role}</td><td>${u.credits}</td></tr>
+        `).join('');
+    }
+
+    async function createUser() {
+        const username = document.getElementById('new-username').value;
+        const role = document.getElementById('new-role').value;
+        if(!username) return;
+        const res = await apiCall('/api/users', 'POST', { username, role });
+        if(res.error) alert(res.error);
+        else {
+            document.getElementById('new-key-display').classList.remove('hidden');
+            document.getElementById('new-key-display').innerHTML = `User created! API Key: <b>${res.api_key}</b>`;
+            loadUsers();
+        }
+    }
+
+    function showTab(tabName) {
+        document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+        document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        event.target.classList.add('active');
+        
+        if (tabName === 'history') loadHistory();
+        if (tabName === 'rules') loadRules();
+        if (tabName === 'users') loadUsers();
+        if (tabName === 'approvals') loadApprovals();
+    }
+
+    function refreshAll() {
+        loadHistory();
+        loadApprovals();
+        if (USER_ROLE === 'admin') {
+            loadRules();
+            loadUsers();
+        }
+    }
+</script>
+</body>
+</html>
